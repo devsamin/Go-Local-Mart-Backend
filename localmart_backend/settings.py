@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import timedelta
-import environ
+import environ 
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -19,6 +19,10 @@ DEBUG = env("DEBUG")
 
 ALLOWED_HOSTS = ["*"]
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://local-market-backend.onrender.com"
+]
+
 # =======================
 # APPS
 # =======================
@@ -29,6 +33,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "cloudinary", "cloudinary_storage",
 
     "rest_framework",
     "django_filters",
@@ -44,6 +49,12 @@ INSTALLED_APPS = [
     "cart",
     "category",
 ]
+DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": env("CLOUDINARY_CLOUD_NAME"),
+    "API_KEY": env("CLOUDINARY_API_KEY"),
+    "API_SECRET": env("CLOUDINARY_API_SECRET"),
+}
 
 AUTH_USER_MODEL = "users.User"
 ROOT_URLCONF = "localmart_backend.urls"
@@ -117,7 +128,7 @@ DATABASES = {
 STATIC_URL = "/static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
-
+STATIC_ROOT = BASE_DIR / "staticfiles"
 # =======================
 # STRIPE
 # =======================
