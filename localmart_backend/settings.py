@@ -20,7 +20,7 @@ DEBUG = env("DEBUG")
 ALLOWED_HOSTS = ["*"]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://local-market-backend.onrender.com"
+    "https://local-mart-11yd.onrender.com"
 ]
 
 # =======================
