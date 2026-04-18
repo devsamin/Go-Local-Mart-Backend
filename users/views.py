@@ -51,6 +51,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .models import User
 from .serializers import RegisterSerializer, UserSerializer, MyTokenObtainPairSerializer
+from rest_framework.parsers import MultiPartParser, FormParser
 
 
 # ✅ JWT Login View (With Role Validation)
@@ -64,13 +65,34 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
 
+    parser_classes = [MultiPartParser, FormParser]
+
 
 # ✅ Profile View / Update
+# class ProfileView(APIView):
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def get(self, request):
+#         serializer = UserSerializer(request.user)
+#         return Response(serializer.data)
+from rest_framework.parsers import MultiPartParser, FormParser
+
 class ProfileView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]  # 🔥 important
 
     def get(self, request):
         serializer = UserSerializer(request.user)
+        return Response(serializer.data)
+
+    def put(self, request):
+        serializer = UserSerializer(
+            request.user,
+            data=request.data,
+            partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(serializer.data)
 
     def put(self, request):

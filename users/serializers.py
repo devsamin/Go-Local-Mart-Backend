@@ -122,6 +122,7 @@ from .models import User
 
 # Register / Signup
 class RegisterSerializer(serializers.ModelSerializer):
+    photo = serializers.ImageField(required=False)
     password = serializers.CharField(write_only=True, min_length=6)
 
     class Meta:
@@ -147,6 +148,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 # User Profile / Read
 class UserSerializer(serializers.ModelSerializer):
+    photo = serializers.SerializerMethodField()
     class Meta:
         model = User
         fields = [
