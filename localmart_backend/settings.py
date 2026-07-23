@@ -19,15 +19,19 @@ env = environ.Env(DEBUG=(bool, False))
 environ.Env.read_env(BASE_DIR / ".env")
 
 DEBUG = env.bool("DEBUG", default=False)
+IS_RENDER = env.bool("RENDER", default=False)
 SECRET_KEY = env("SECRET_KEY", default="")
 if not SECRET_KEY:
     if DEBUG or TESTING:
         SECRET_KEY = "local-development-key-change-me"
     else:
         raise ImproperlyConfigured("SECRET_KEY must be configured when DEBUG is false.")
-ALLOWED_HOSTS = env.list(
+configured_allowed_hosts = env.list(
     "ALLOWED_HOSTS",
     default=["localhost", "127.0.0.1", "local-mart-11yd.onrender.com"],
+)
+ALLOWED_HOSTS = list(
+    dict.fromkeys([*configured_allowed_hosts, "local-mart-11yd.onrender.com"])
 )
 
 INSTALLED_APPS = [
@@ -123,7 +127,7 @@ cloudinary_values = {
 # DEBUG=false.
 USE_CLOUDINARY = env.bool(
     "USE_CLOUDINARY",
-    default=env.bool("RENDER", default=False) and not TESTING,
+    default=IS_RENDER and not TESTING,
 )
 if USE_CLOUDINARY and all(cloudinary_values.values()):
     CLOUDINARY_STORAGE = cloudinary_values
@@ -132,13 +136,30 @@ if USE_CLOUDINARY and all(cloudinary_values.values()):
         "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
     }
 
-FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173").rstrip("/")
-BACKEND_BASE_URL = env("BACKEND_BASE_URL", default="http://localhost:8000").rstrip("/")
-CORS_ALLOWED_ORIGINS = env.list(
+PRODUCTION_FRONTEND_URL = "https://golocalmart.vercel.app"
+PRODUCTION_BACKEND_URL = "https://local-mart-11yd.onrender.com"
+FRONTEND_URL = env(
+    "FRONTEND_URL",
+    default=PRODUCTION_FRONTEND_URL if IS_RENDER else "http://localhost:5173",
+).rstrip("/")
+BACKEND_BASE_URL = env(
+    "BACKEND_BASE_URL",
+    default=PRODUCTION_BACKEND_URL if IS_RENDER else "http://localhost:8000",
+).rstrip("/")
+configured_cors_origins = env.list(
     "CORS_ALLOWED_ORIGINS",
-    default=[FRONTEND_URL, "https://local-mart-frontend.vercel.app"],
+    default=[FRONTEND_URL],
 )
-CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=CORS_ALLOWED_ORIGINS)
+CORS_ALLOWED_ORIGINS = list(
+    dict.fromkeys([*configured_cors_origins, PRODUCTION_FRONTEND_URL])
+)
+configured_csrf_origins = env.list(
+    "CSRF_TRUSTED_ORIGINS",
+    default=CORS_ALLOWED_ORIGINS,
+)
+CSRF_TRUSTED_ORIGINS = list(
+    dict.fromkeys([*configured_csrf_origins, PRODUCTION_FRONTEND_URL])
+)
 CORS_ALLOW_CREDENTIALS = False
 
 REST_FRAMEWORK = {
