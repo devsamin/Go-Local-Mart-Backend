@@ -1,95 +1,42 @@
-from orders.models import OrderItem
+from django.db import IntegrityError, transaction
+from rest_framework import permissions, status, viewsets
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
-# from rest_framework import status
-# from rest_framework import viewsets, permissions
-# from .models import Review
-# from .serializers import ReviewSerializer
 
-
-# class ReviewViewSet(viewsets.ModelViewSet):
-#     queryset = Review.objects.all().order_by("-created_at")
-#     serializer_class = ReviewSerializer
-
-#     def get_permissions(self):
-#         if self.action in ["create", "update", "destroy"]:
-#             return [permissions.IsAuthenticated()]
-#         return [permissions.AllowAny()]
-
-#     def create(self, request, *args, **kwargs):
-#         user = request.user
-#         order_item_id = request.data.get("order_item")
-
-#         if not order_item_id:
-#             return Response({"error": "order_item is required"}, status=400)
-
-#         try:
-#             order_item = OrderItem.objects.get(id=order_item_id, order__user=user)
-#         except OrderItem.DoesNotExist:
-#             return Response({"error": "Invalid order item"}, status=400)
-
-#         # ❗ Only allow review if delivered
-#         if order_item.status != "delivered":
-#             return Response({"error": "You can review only after delivery"}, status=403)
-
-#         # ❗ Prevent duplicate review
-#         if hasattr(order_item, "review"):
-#             return Response({"error": "Review already submitted"}, status=400)
-
-#         serializer = self.get_serializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-
-#         serializer.save(
-#             user=user,
-#             product=order_item.product,
-#             order_item=order_item
-#         )
-
-#         return Response(serializer.data, status=201)
-
-
-from rest_framework import viewsets, permissions
+from localmart_backend.permissions import IsReviewOwnerOrReadOnly
+from orders.models import OrderItem
 from .models import Review
 from .serializers import ReviewSerializer
 
+
 class ReviewViewSet(viewsets.ModelViewSet):
     serializer_class = ReviewSerializer
-
-    def get_permissions(self):
-        if self.action in ["create", "update", "destroy"]:
-            return [permissions.IsAuthenticated()]
-        return [permissions.AllowAny()]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly, IsReviewOwnerOrReadOnly]
+    http_method_names = ("get", "post", "patch", "delete", "head", "options")
+    filterset_fields = ("product", "rating", "user")
+    ordering_fields = ("created_at", "rating")
 
     def get_queryset(self):
-        user = self.request.user
-        # শুধুমাত্র logged-in user নিজের review দেখতে পারবে
-        if user.is_authenticated:
-            return Review.objects.filter(user=user).order_by("-created_at")
-        return Review.objects.none()  # anonymous user কোন review দেখবে না
+        return Review.objects.select_related("user", "product", "order_item")
 
     def create(self, request, *args, **kwargs):
-        user = request.user
         order_item_id = request.data.get("order_item")
-
-        if not order_item_id:
-            return Response({"error": "order_item is required"}, status=400)
-
         try:
-            order_item = OrderItem.objects.get(id=order_item_id, order__user=user)
-        except OrderItem.DoesNotExist:
-            return Response({"error": "Invalid order item"}, status=400)
-
+            order_item = OrderItem.objects.select_related("product", "order").get(
+                id=order_item_id, order__user=request.user
+            )
+        except (OrderItem.DoesNotExist, ValueError, TypeError):
+            raise ValidationError({"order_item": "Choose an item from one of your orders."})
         if order_item.status != "delivered":
-            return Response({"error": "You can review only after delivery"}, status=403)
-
-        if hasattr(order_item, "review"):
-            return Response({"error": "Review already submitted"}, status=400)
+            raise ValidationError({"order_item": "Reviews are available after delivery."})
+        if order_item.product_id is None:
+            raise ValidationError({"order_item": "This product is no longer available."})
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(
-            user=user,
-            product=order_item.product,
-            order_item=order_item
-        )
-
-        return Response(serializer.data, status=201)
+        try:
+            with transaction.atomic():
+                serializer.save(user=request.user, product=order_item.product, order_item=order_item)
+        except IntegrityError:
+            raise ValidationError({"order_item": "A review already exists for this item."})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

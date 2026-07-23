@@ -1,9 +1,11 @@
-from rest_framework import generics, permissions
+from rest_framework import generics
+
+from localmart_backend.permissions import IsAdminOrReadOnly
 from .models import Category
 from .serializers import CategorySerializer
 
-# ✅ List and Create Category API
+
 class CategoryListCreateView(generics.ListCreateAPIView):
-    queryset = Category.objects.all()
+    queryset = Category.objects.order_by("name")
     serializer_class = CategorySerializer
-    permission_classes = [permissions.AllowAny]  # চাইলে IsAuthenticated করতে পারো
+    permission_classes = [IsAdminOrReadOnly]

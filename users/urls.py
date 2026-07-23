@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import RegisterView, ProfileView, MyTokenObtainPairView
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import ChangePasswordView
+from .views import ChangePasswordView, LogoutView
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -11,4 +11,5 @@ urlpatterns = [
 
     # 🔐 Change Password
     path('change-password/', ChangePasswordView.as_view(), name='change-password'),
+    path('logout/', LogoutView.as_view(), name='logout'),
 ]

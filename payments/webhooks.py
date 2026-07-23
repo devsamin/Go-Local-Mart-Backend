@@ -1,56 +1,56 @@
-# import stripe
-# from django.conf import settings
-# from django.http import HttpResponse
-# from django.views.decorators.csrf import csrf_exempt
+import stripe
+from django.conf import settings
+from django.db import transaction
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
 
-# from orders.models import Order
-# from cart.models import CartItem
-
-
-# stripe.api_key = settings.STRIPE_SECRET_KEY
+from orders.models import Order
+from orders.services import cancel_and_release_order
 
 
-# @csrf_exempt
-# def stripe_webhook(request):
-#     payload = request.body
-#     sig_header = request.META.get("HTTP_STRIPE_SIGNATURE")
-# # 
-#     try:
-#         event = stripe.Webhook.construct_event(
-#             payload=payload,
-#             sig_header=sig_header,
-#             secret=settings.STRIPE_WEBHOOK_SECRET,
-#         )
-#     except ValueError:
-#         # Invalid payload
-#         return HttpResponse(status=400)
-#     except stripe.error.SignatureVerificationError:
-#         # Invalid signature
-#         return HttpResponse(status=400)
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
-#     # ==================================================
-#     # ✅ CHECKOUT PAYMENT SUCCESS (MOST IMPORTANT EVENT)
-#     # ==================================================
-#     if event["type"] == "checkout.session.completed":
-#         session = event["data"]["object"]
 
-#         order_id = session["metadata"].get("order_id")
-#         payment_intent = session.get("payment_intent")
+@csrf_exempt
+def stripe_webhook(request):
+    if request.method != "POST":
+        return HttpResponse(status=405)
+    if not settings.STRIPE_WEBHOOK_SECRET:
+        return HttpResponse(status=503)
 
-#         try:
-#             order = Order.objects.get(id=order_id)
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=request.body,
+            sig_header=request.headers.get("Stripe-Signature", ""),
+            secret=settings.STRIPE_WEBHOOK_SECRET,
+        )
+    except (ValueError, stripe.SignatureVerificationError):
+        return HttpResponse(status=400)
 
-#             # 🔐 Prevent duplicate webhook execution
-#             if not order.is_paid:
-#                 order.is_paid = True
-#                 order.status = "pending"
-#                 order.transaction_id = payment_intent
-#                 order.save()
+    session = event["data"]["object"]
+    order_id = session.get("metadata", {}).get("order_id")
+    if not order_id:
+        return HttpResponse(status=200)
 
-#                 # 🔥 CLEAR CART AFTER SUCCESSFUL PAYMENT
-#                 CartItem.objects.filter(cart__user=order.user).delete()
+    try:
+        order = Order.objects.get(pk=order_id)
+    except Order.DoesNotExist:
+        return HttpResponse(status=200)
 
-#         except Order.DoesNotExist:
-#             pass
+    if event["type"] in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
+        with transaction.atomic():
+            order = Order.objects.select_for_update().get(pk=order.pk)
+            if not order.is_paid and session.get("payment_status") == "paid":
+                order.is_paid = True
+                order.status = "pending"
+                order.transaction_id = session.get("payment_intent") or ""
+                order.stripe_session_id = session.get("id") or order.stripe_session_id
+                order.save(
+                    update_fields=[
+                        "is_paid", "status", "transaction_id", "stripe_session_id", "updated_at"
+                    ]
+                )
+    elif event["type"] in {"checkout.session.expired", "checkout.session.async_payment_failed"}:
+        cancel_and_release_order(order, restore_cart=True)
 
-#     return HttpResponse(status=200)
+    return HttpResponse(status=200)

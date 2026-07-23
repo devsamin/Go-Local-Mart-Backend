@@ -1,256 +1,82 @@
-# from rest_framework import viewsets, permissions, status
-# from rest_framework.response import Response
-# from rest_framework.decorators import action
-# from .models import Cart, CartItem
-# from .serializers import CartSerializer, CartItemSerializer
-# from products.models import Product
-
-# class CartViewSet(viewsets.ModelViewSet):
-#     serializer_class = CartSerializer
-#     permission_classes = [permissions.IsAuthenticated]
-
-#     def get_queryset(self):
-#         return Cart.objects.filter(user=self.request.user)
-
-#     def perform_create(self, serializer):
-#         serializer.save(user=self.request.user)
-
-#     # 🔹 View cart
-#     def list(self, request):
-#         cart, created = Cart.objects.get_or_create(user=request.user)
-
-#         # Print cart info
-#         print(f"Cart ID: {cart.id}, User: {cart.user.username}, Created: {created}")
-
-#         # Print all items in the cart
-#         if cart.items.exists():
-#             for item in cart.items.all():
-#                 print(
-#                     f"Item ID: {item.id}, Product: {item.product.name}, "
-#                     f"Quantity: {item.quantity}, Total Price: {item.total_price}"
-#                 )
-#         else:
-#             print("Cart is empty")
-
-#         serializer = CartSerializer(cart)
-#         return Response(serializer.data)
-
-#     # 🔹 Add item to cart
-#     @action(detail=False, methods=['post'])
-#     def add_item(self, request):
-#         product_id = request.data.get('product_id')
-#         quantity = int(request.data.get('quantity', 1))
-
-#         try:
-#             product = Product.objects.get(id=product_id)
-#         except Product.DoesNotExist:
-#             return Response({'error': 'Product not found'}, status=404)
-
-#         cart, created = Cart.objects.get_or_create(user=request.user)
-
-#         # Check stock
-#         if product.stock < quantity:
-#             return Response({'error': 'Insufficient stock'}, status=400)
-
-#         # Add or update item
-#         item, created = CartItem.objects.get_or_create(cart=cart, product=product)
-#         item.quantity += quantity
-#         item.save()
-
-#         # Reduce stock
-#         product.stock -= quantity
-#         product.save()
-
-#         # Print updated cart
-#         print(f"Added {quantity} of {product.name} to cart.")
-#         self.print_cart(cart)
-
-#         return Response({'message': 'Item added successfully'}, status=200)
-
-#     # 🔹 Remove item
-#     @action(detail=False, methods=['post'])
-#     def remove_item(self, request):
-#         product_id = request.data.get('product_id')
-#         cart = Cart.objects.get(user=request.user)
-#         item = CartItem.objects.filter(cart=cart, product_id=product_id).first()
-#         if item:
-#             print(f"Removing {item.product.name} from cart.")
-#             item.delete()
-
-#             # Print updated cart
-#             self.print_cart(cart)
-
-#             return Response({'message': 'Item removed successfully'})
-#         return Response({'error': 'Item not found'}, status=404)
-
-#     # 🔹 Clear entire cart
-#     @action(detail=False, methods=['post'])
-#     def clear(self, request):
-#         cart = Cart.objects.get(user=request.user)
-#         cart.items.all().delete()
-
-#         print(f"Cleared all items from cart ID: {cart.id}")
-#         self.print_cart(cart)
-
-#         return Response({'message': 'Cart cleared successfully'})
-
-#     # 🔹 Utility method to print cart contents
-#     def print_cart(self, cart):
-#         if cart.items.exists():
-#             print(f"Cart ID: {cart.id} contents:")
-#             for item in cart.items.all():
-#                 print(
-#                     f"  Item ID: {item.id}, Product: {item.product.name}, "
-#                     f"Quantity: {item.quantity}, Total Price: {item.total_price}"
-#                 )
-#         else:
-#             print("Cart is empty")
-
-
-from rest_framework import viewsets, permissions, status
-from rest_framework.response import Response
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
-from .models import Cart, CartItem
-from .serializers import CartSerializer, CartItemSerializer
+from rest_framework.response import Response
+
 from products.models import Product
+from localmart_backend.permissions import IsBuyer
+from .models import Cart, CartItem
+from .serializers import CartMutationSerializer, CartSerializer
 
 
-class CartViewSet(viewsets.ModelViewSet):
+class CartViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     serializer_class = CartSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsBuyer]
 
     def get_queryset(self):
-        return Cart.objects.filter(user=self.request.user)
+        return Cart.objects.filter(user=self.request.user).prefetch_related(
+            "items__product__seller", "items__product__categories"
+        )
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+    def _cart(self):
+        cart, _ = Cart.objects.get_or_create(user=self.request.user)
+        return self.get_queryset().get(pk=cart.pk)
 
-    # ---------------------------------------------------
-    # VIEW CART
-    # ---------------------------------------------------
-    def list(self, request):
-        cart, _ = Cart.objects.get_or_create(user=request.user)
-        serializer = CartSerializer(cart)
-        return Response(serializer.data, status=200)
+    def list(self, request, *args, **kwargs):
+        return Response(self.get_serializer(self._cart()).data)
 
-    # ---------------------------------------------------
-    # ADD ITEM
-    # ---------------------------------------------------
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=("post",))
     def add_item(self, request):
-        product_id = request.data.get("product_id")
-        quantity = int(request.data.get("quantity", 1))
+        payload = CartMutationSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        product = get_object_or_404(Product, pk=payload.validated_data["product_id"])
+        quantity = payload.validated_data["quantity"]
 
-        if quantity <= 0:
-            return Response({"error": "Invalid quantity"}, status=400)
+        with transaction.atomic():
+            cart, _ = Cart.objects.select_for_update().get_or_create(user=request.user)
+            item = CartItem.objects.select_for_update().filter(cart=cart, product=product).first()
+            new_quantity = (item.quantity if item else 0) + quantity
+            if new_quantity > product.stock:
+                return Response(
+                    {"error": f"Only {product.stock} item(s) are currently available."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if item:
+                item.quantity = new_quantity
+                item.save(update_fields=["quantity"])
+            else:
+                CartItem.objects.create(cart=cart, product=product, quantity=new_quantity)
 
-        try:
-            product = Product.objects.get(id=product_id)
-        except Product.DoesNotExist:
-            return Response({"error": "Product not found"}, status=404)
+        return Response({"message": "Cart updated.", "cart": self.get_serializer(self._cart()).data})
 
-        cart, _ = Cart.objects.get_or_create(user=request.user)
-
-        # STOCK CHECK
-        if product.stock < quantity:
-            return Response(
-                {"error": f"Only {product.stock} items in stock"},
-                status=400
-            )
-
-        # Add or update cart item
-        item, created = CartItem.objects.get_or_create(cart=cart, product=product)
-
-        if created:
-            item.quantity = quantity
-        else:
-            item.quantity += quantity
-
-        item.save()
-
-        # Reduce stock
-        product.stock -= quantity
-        product.save()
-
-        return Response(
-            {"message": "Item added successfully", "cart": CartSerializer(cart).data},
-            status=200
-        )
-
-    # ---------------------------------------------------
-    # REMOVE ONE ITEM COMPLETELY
-    # ---------------------------------------------------
-    @action(detail=False, methods=['post'])
-    def remove_item(self, request):
-        product_id = request.data.get("product_id")
-
-        cart = Cart.objects.get(user=request.user)
-        item = CartItem.objects.filter(cart=cart, product_id=product_id).first()
-
-        if not item:
-            return Response({"error": "Item not found"}, status=404)
-
-        # Restore product stock
-        product = item.product
-        product.stock += item.quantity
-        product.save()
-
-        item.delete()
-
-        return Response(
-            {"message": "Item removed successfully", "cart": CartSerializer(cart).data},
-            status=200
-        )
-
-        # ---------------------------------------------------
-    # DECREASE QUANTITY BY 1
-    # ---------------------------------------------------
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=("post",))
     def decrease_item(self, request):
-        product_id = request.data.get("product_id")
-        cart = Cart.objects.get(user=request.user)
-        item = CartItem.objects.filter(cart=cart, product_id=product_id).first()
-
-        if not item:
-            return Response({"error": "Item not found"}, status=404)
-
-        # Decrease quantity by 1
-        if item.quantity > 1:
-            item.quantity -= 1
-            item.save()
-
-            # Restore stock by 1
-            product = item.product
-            product.stock += 1
-            product.save()
-        else:
-            # Quantity is 1 → remove item completely
-            product = item.product
-            product.stock += 1
-            product.save()
+        payload = CartMutationSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        cart = self._cart()
+        item = get_object_or_404(CartItem, cart=cart, product_id=payload.validated_data["product_id"])
+        if item.quantity <= 1:
             item.delete()
+        else:
+            item.quantity -= 1
+            item.save(update_fields=["quantity"])
+        return Response({"message": "Cart updated.", "cart": self.get_serializer(self._cart()).data})
 
-        return Response(
-            {"message": "Item quantity decreased", "cart": CartSerializer(cart).data},
-            status=200
-        )
+    @action(detail=False, methods=("post",))
+    def remove_item(self, request):
+        payload = CartMutationSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        cart = self._cart()
+        deleted, _ = CartItem.objects.filter(
+            cart=cart, product_id=payload.validated_data["product_id"]
+        ).delete()
+        if not deleted:
+            return Response({"error": "Item not found."}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"message": "Item removed.", "cart": self.get_serializer(self._cart()).data})
 
-    # ---------------------------------------------------
-    # CLEAR CART
-    # ---------------------------------------------------
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=("post",))
     def clear(self, request):
-        cart = Cart.objects.get(user=request.user)
-
-        # Restore stock for all items
-        for item in cart.items.all():
-            product = item.product
-            product.stock += item.quantity
-            product.save()
-
+        cart = self._cart()
         cart.items.all().delete()
-
-        return Response(
-            {"message": "Cart cleared successfully", "cart": CartSerializer(cart).data},
-            status=200
-        )
+        return Response({"message": "Cart cleared.", "cart": self.get_serializer(self._cart()).data})

@@ -1,63 +1,71 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
+from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Q, Sum
+from django.db.models.functions import Coalesce
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Avg
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from localmart_backend.permissions import IsSeller
 from orders.models import OrderItem
 from products.models import Product
 from reviews.models import Review
 
+
 class SellerDashboardView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSeller]
 
     def get(self, request):
-        seller = request.user  # current logged-in seller
+        orders = OrderItem.objects.filter(seller=request.user, order__is_paid=True)
+        revenue = ExpressionWrapper(F("price") * F("quantity"), output_field=DecimalField())
+        summary = orders.aggregate(
+            total_earnings=Coalesce(Sum(revenue), 0, output_field=DecimalField()),
+            products_sold=Coalesce(Sum("quantity"), 0),
+            pending=Count("id", filter=Q(status="pending")),
+            processing=Count("id", filter=Q(status="processing")),
+            shipped=Count("id", filter=Q(status="shipped")),
+            completed=Count("id", filter=Q(status="delivered")),
+            cancelled=Count("id", filter=Q(status="cancelled")),
+        )
+        product_summary = Product.objects.filter(seller=request.user).aggregate(
+            product_count=Count("id"), low_stock=Count("id", filter=Q(stock__lte=5))
+        )
+        reviews = Review.objects.filter(product__seller=request.user).select_related("user", "product")
+        average_rating = reviews.aggregate(value=Avg("rating"))["value"] or 0
 
-        # Get all orders for this seller
-        orders = OrderItem.objects.filter(seller=seller)
-        products = Product.objects.filter(seller=seller)
-        reviews = Review.objects.filter(product__seller=seller)
-
-        # Summary stats
-        total_earnings = sum(o.price * o.quantity for o in orders)
-        products_sold = sum(o.quantity for o in orders)
-        orders_count = {
-            'pending': orders.filter(order__status='pending').count(),
-            'completed': orders.filter(order__status='delivered').count(),
-            'cancelled': orders.filter(order__status='cancelled').count(),
-        }
-        avg_rating = reviews.aggregate(Avg('rating'))['rating__avg'] or 0
-
-        # Recent 5 orders
         recent_orders = [
             {
-                'id': o.order.id,
-                'product_name': o.product.name,
-                'quantity': o.quantity,
-                'price': o.price,
-                'status': o.order.status
-            } 
-            for o in orders.order_by('-order__created_at')[:5]
+                "id": item.order_id,
+                "item_id": item.id,
+                "product_name": item.product_name,
+                "quantity": item.quantity,
+                "price": item.price,
+                "status": item.status,
+                "created_at": item.order.created_at,
+            }
+            for item in orders.select_related("order").order_by("-order__created_at")[:5]
         ]
-
-        # Recent 5 reviews
         recent_reviews = [
             {
-                'customer': r.user.get_full_name() if r.user else "Guest",
-                'product': r.product.name,
-                'rating': r.rating,
-                'comment': r.comment,
-                'date': r.created_at.strftime("%d %b %Y")
+                "customer": review.user.get_full_name() or review.user.username,
+                "product": review.product.name,
+                "rating": review.rating,
+                "comment": review.comment,
+                "date": review.created_at,
             }
-            for r in reviews.order_by('-created_at')[:5]
+            for review in reviews[:5]
         ]
 
-        data = {
-            'total_earnings': total_earnings,
-            'products_sold': products_sold,
-            'orders_count': orders_count,
-            'average_rating': round(avg_rating, 1),
-            'recent_orders': recent_orders,
-            'recent_reviews': recent_reviews,
-        }
-
-        return Response(data)
+        return Response(
+            {
+                "total_earnings": summary["total_earnings"],
+                "products_sold": summary["products_sold"],
+                "orders_count": {
+                    key: summary[key]
+                    for key in ("pending", "processing", "shipped", "completed", "cancelled")
+                },
+                "product_count": product_summary["product_count"],
+                "low_stock_count": product_summary["low_stock"],
+                "average_rating": round(average_rating, 1),
+                "recent_orders": recent_orders,
+                "recent_reviews": recent_reviews,
+            }
+        )

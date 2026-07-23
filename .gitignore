@@ -4,3 +4,6 @@ db.sqlite3
 .env
 venv/
 staticfiles/
+media/
+.coverage
+htmlcov/

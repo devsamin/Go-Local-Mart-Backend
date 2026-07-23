@@ -1,6 +1,8 @@
-from django.urls import path
-from .views import SpecialOfferListCreateAPIView
+from rest_framework.routers import DefaultRouter
 
-urlpatterns = [
-    path("", SpecialOfferListCreateAPIView.as_view(), name="special-offers"),
-]
+from .views import SpecialOfferViewSet
+
+
+router = DefaultRouter()
+router.register("", SpecialOfferViewSet, basename="special-offer")
+urlpatterns = router.urls

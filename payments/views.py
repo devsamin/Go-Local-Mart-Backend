@@ -1,185 +1,110 @@
-# # payments/views.py
-# import stripe
-# from django.conf import settings
-# from rest_framework.decorators import api_view, permission_classes
-# from rest_framework.permissions import IsAuthenticated
-# from rest_framework.response import Response
-# from orders.models import Order
+from decimal import Decimal
+from urllib.parse import urljoin
 
-# stripe.api_key = settings.STRIPE_SECRET_KEY
-
-# # @api_view(["POST"])
-# # @permission_classes([IsAuthenticated])
-# # def create_stripe_checkout(request):
-# #     order_id = request.data.get("order_id")
-
-# #     try:
-# #         order = Order.objects.get(id=order_id, user=request.user)
-# #     except Order.DoesNotExist:
-# #         return Response({"error": "Order not found"}, status=404)
-
-# #     # example: first product image
-# #     order_item = order.items.first()
-# #     product = order_item.product
-
-# #     image_url = "http://127.0.0.1:8000/" + product.image.url
-
-# #     session = stripe.checkout.Session.create(
-# #         payment_method_types=["card"],
-# #         mode="payment",
-# #         line_items=[
-# #             {
-# #                 "price_data": {
-# #                     "currency": "bdt",
-# #                     "product_data": {
-# #                         "name": product.name,
-# #                         "images": [image_url],  # ✅ IMAGE HERE
-# #                     },
-# #                     "unit_amount": int(order.total_price * 100),
-# #                 },
-# #                 "quantity": 1,
-# #             }
-# #         ],
-# #         success_url="http://localhost:5173/payment-success",
-# #         cancel_url="http://localhost:5173/cart",
-# #         metadata={"order_id": order.id}
-# #     )
-
-# #     return Response({"checkout_url": session.url})
-
-
-# @api_view(["POST"])
-# @permission_classes([IsAuthenticated])
-# def create_stripe_checkout(request):
-#     order_id = request.data.get("order_id")
-
-#     try:
-#         order = Order.objects.get(id=order_id, user=request.user)
-#     except Order.DoesNotExist:
-#         return Response({"error": "Order not found"}, status=404)
-
-#     line_items = []
-
-#     for item in order.items.all():
-#         product = item.product
-
-#         # ⚠️ MUST be public HTTPS in production
-#         image_url = settings.BACKEND_BASE_URL + product.image.url
-
-#         line_items.append({
-#             "price_data": {
-#                 "currency": "bdt",
-#                 "product_data": {
-#                     "name": product.name,
-#                     "images": [image_url],
-#                 },
-#                 "unit_amount": int(product.discounted_price * 100),
-#             },
-#             "quantity": item.quantity,
-#         })
-
-#     session = stripe.checkout.Session.create(
-#         payment_method_types=["card"],
-#         mode="payment",
-#         line_items=line_items,
-#         success_url="http://localhost:5173/payment-success",
-#         cancel_url="http://localhost:5173/cart",
-#         metadata={"order_id": order.id},
-#     )
-#     # ✅ 🔥 SAVE transaction id HERE
-#     order.transaction_id = session.payment_intent
-#     order.save()
-
-#     return Response({"checkout_url": session.url})
-
-
-
-# payments/views.py
 import stripe
 from django.conf import settings
+from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
 from orders.models import Order
+from orders.services import cancel_and_release_order
+
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_stripe_checkout(request):
-    order_id = request.data.get("order_id")
-
-    if not order_id:
-        return Response({"error": "Order ID is required"}, status=400)
+    try:
+        order_id = int(request.data.get("order_id"))
+    except (TypeError, ValueError):
+        raise ValidationError({"order_id": "A valid order ID is required."})
 
     try:
-        order = Order.objects.get(id=order_id, user=request.user)
+        order = Order.objects.prefetch_related("items__product").get(id=order_id, user=request.user)
     except Order.DoesNotExist:
-        return Response({"error": "Order not found"}, status=404)
+        return Response({"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if order.is_paid:
+        raise ValidationError({"order_id": "This order is already paid."})
+    if order.status == "cancelled" or not order.inventory_reserved:
+        raise ValidationError({"order_id": "This checkout has expired. Please place the order again."})
+    if not settings.STRIPE_SECRET_KEY:
+        return Response({"error": "Payments are not configured."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
     line_items = []
-
+    items_total = Decimal("0.00")
     for item in order.items.all():
-        product = item.product
-
-        # ⚠️ Must be HTTPS in production
-        image_url = settings.BACKEND_BASE_URL + product.image.url
-
-        line_items.append({
-            "price_data": {
-                "currency": "bdt",
-                "product_data": {
-                    "name": product.name,
-                    "images": [image_url],
+        product_data = {"name": item.product_name}
+        if item.product and item.product.image:
+            image_url = item.product.image.url
+            if image_url.startswith("/"):
+                image_url = urljoin(f"{settings.BACKEND_BASE_URL}/", image_url.lstrip("/"))
+            if image_url.startswith("https://"):
+                product_data["images"] = [image_url]
+        line_items.append(
+            {
+                "price_data": {
+                    "currency": settings.STRIPE_CURRENCY,
+                    "product_data": product_data,
+                    "unit_amount": int(item.price * 100),
                 },
-                "unit_amount": int(product.discounted_price * 100),
-            },
-            "quantity": item.quantity,
-        })
+                "quantity": item.quantity,
+            }
+        )
+        items_total += item.price * item.quantity
 
-    # Success URL তে order_id পাঠানো
-    success_url = f"http://localhost:5173/payment-success?order_id={order.id}"
-    cancel_url = "http://localhost:5173/cart"
+    service_fee = order.total_price - items_total
+    if service_fee > 0:
+        line_items.append(
+            {
+                "price_data": {
+                    "currency": settings.STRIPE_CURRENCY,
+                    "product_data": {"name": "Delivery"},
+                    "unit_amount": int(service_fee * 100),
+                },
+                "quantity": 1,
+            }
+        )
 
-    session = stripe.checkout.Session.create(
-        payment_method_types=["card"],
-        mode="payment",
-        line_items=line_items,
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={"order_id": order.id},
-    )
+    try:
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            mode="payment",
+            line_items=line_items,
+            success_url=f"{settings.FRONTEND_URL}/payment-success?order_id={order.id}&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{settings.FRONTEND_URL}/payment-failed?order_id={order.id}",
+            metadata={"order_id": str(order.id), "user_id": str(request.user.id)},
+            client_reference_id=str(order.id),
+        )
+    except stripe.StripeError:
+        cancel_and_release_order(order, restore_cart=True)
+        return Response(
+            {"error": "The payment provider could not start checkout. Your cart was restored."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
 
-    # ⚠️ session.payment_intent কখনো None হতে পারে, তাই optional
-    if session.payment_intent:
-        order.transaction_id = session.payment_intent
-        order.save()
+    order.stripe_session_id = session.id
+    order.save(update_fields=["stripe_session_id", "updated_at"])
+    return Response({"checkout_url": session.url, "order_id": order.id})
 
-    return Response({"checkout_url": session.url})
-
-from cart.models import CartItem
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
-def payment_success(request):
-    order_id = request.GET.get("order_id")
-
-    if not order_id:
-        return Response({"error": "Order ID missing"}, status=400)
-
+def payment_status(request):
+    try:
+        order_id = int(request.query_params.get("order_id"))
+    except (TypeError, ValueError):
+        raise ValidationError({"order_id": "A valid order ID is required."})
     try:
         order = Order.objects.get(id=order_id, user=request.user)
-
-        if not order.is_paid:
-            order.is_paid = True
-            order.status = "pending"
-            order.save()
-
-            # 🔥 CART CLEAR
-            CartItem.objects.filter(cart__user=request.user).delete()
-
-        return Response({"message": "Payment confirmed & cart cleared"})
-
     except Order.DoesNotExist:
-        return Response({"error": "Order not found"}, status=404)
-
+        return Response({"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+    return Response(
+        {"order_id": order.id, "paid": order.is_paid, "status": order.status},
+        status=status.HTTP_200_OK,
+    )
