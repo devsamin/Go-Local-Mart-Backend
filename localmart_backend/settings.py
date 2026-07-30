@@ -129,6 +129,13 @@ USE_CLOUDINARY = env.bool(
     "USE_CLOUDINARY",
     default=IS_RENDER and not TESTING,
 )
+SERVE_LOCAL_MEDIA = env.bool(
+    "SERVE_LOCAL_MEDIA",
+    # The repository contains legacy media referenced by the production
+    # database. Keep those files reachable on Render while all new uploads
+    # continue to go to Cloudinary.
+    default=IS_RENDER and not TESTING,
+)
 if USE_CLOUDINARY and all(cloudinary_values.values()):
     CLOUDINARY_STORAGE = cloudinary_values
     STORAGES = {

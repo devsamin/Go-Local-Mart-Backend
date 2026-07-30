@@ -1,9 +1,14 @@
+import base64
 from decimal import Decimal
+from pathlib import Path
+import tempfile
 
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from category.models import Category
+from localmart_backend.media import optimized_image_url
 from users.models import User
 from .models import Product
 
@@ -46,3 +51,27 @@ class ProductApiTests(APITestCase):
         self.client.force_authenticate(self.owner)
         response = self.client.patch(f"/api/products/{self.product.id}/", {"discount": 100})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_legacy_media_uses_reachable_backend_url(self):
+        image_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        with tempfile.TemporaryDirectory() as media_root, override_settings(
+            MEDIA_ROOT=media_root,
+            SERVE_LOCAL_MEDIA=True,
+        ):
+            image_path = Path(media_root, "products", "tea.png")
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(image_bytes)
+            self.product.image.name = "products/tea.png"
+
+            image_url = optimized_image_url(
+                self.product.image,
+                request=self.client.get("/api/products/").wsgi_request,
+            )
+            response = self.client.get("/media/products/tea.png")
+            response_content = b"".join(response.streaming_content)
+
+        self.assertEqual(image_url, "http://testserver/media/products/tea.png")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response_content, image_bytes)

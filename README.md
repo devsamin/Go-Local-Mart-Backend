@@ -20,6 +20,8 @@ Do not use `py manage.py runserver` unless the required packages are installed i
 
 SQLite is suitable for local development. Set `DATABASE_URL` to PostgreSQL in production. Configure the Stripe webhook endpoint as `/api/payment/stripe/webhook/`; browser redirects never mark an order paid.
 
+Production uploads use Cloudinary. Media records created before Cloudinary was enabled are served from the repository's `media/` directory when `SERVE_LOCAL_MEDIA=True`; this compatibility mode defaults to enabled on Render.
+
 ## Verification
 
 ```text
