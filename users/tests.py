@@ -67,3 +67,41 @@ class UserApiTests(APITestCase):
             "/api/users/change-password/", {"current_password": "wrong", "new_password": "New-strong-pass-456"}, format="json"
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_profile_patch_replaces_photo_file(self):
+        old_image = SimpleUploadedFile(
+            "old-avatar.png",
+            base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ),
+            content_type="image/png",
+        )
+        new_image = SimpleUploadedFile(
+            "new-avatar.png",
+            base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ),
+            content_type="image/png",
+        )
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            user = User.objects.create_user(
+                "photo-update",
+                email="photo-update@example.com",
+                password="Strong-pass-123",
+                photo=old_image,
+            )
+            old_name = user.photo.name
+            self.client.force_authenticate(user)
+
+            response = self.client.patch(
+                "/api/users/profile/",
+                {"photo": new_image},
+                format="multipart",
+            )
+            user.refresh_from_db()
+            updated_name = user.photo.name
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotEqual(updated_name, old_name)
+        self.assertTrue(updated_name.endswith("new-avatar.png"))
+        self.assertIn("new-avatar.png", response.data["photo"])

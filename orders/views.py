@@ -11,7 +11,11 @@ from products.models import Product
 from reviews.models import Review
 from .models import Order, OrderItem
 from .serializers import OrderSerializer, SellerOrderItemSerializer
-from .services import cancel_and_release_order
+from .services import (
+    aggregate_order_status,
+    available_fulfillment_statuses,
+    cancel_and_release_order,
+)
 
 
 DELIVERY_FEE = Decimal("60.00")
@@ -25,40 +29,32 @@ class SellerOrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
     def get_queryset(self):
         if self.request.user.role != "seller":
             raise PermissionDenied("A seller account is required.")
-        return OrderItem.objects.filter(seller=self.request.user).select_related(
+        return OrderItem.objects.filter(
+            seller=self.request.user,
+            order__is_paid=True,
+        ).select_related(
             "order__user", "product__seller"
-        ).prefetch_related("product__categories")
+        ).prefetch_related("product__categories").order_by("-order__created_at", "-id")
 
+    @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
-        item = self.get_object()
-        next_status = request.data.get("status")
-        transitions = {
-            "pending": {"processing"},
-            "processing": {"shipped"},
-            "shipped": {"delivered"},
-            "delivered": set(),
-            "cancelled": set(),
+        item = self.get_queryset().select_for_update().get(pk=kwargs["pk"])
+        order = Order.objects.select_for_update().get(pk=item.order_id)
+        serializer = self.get_serializer(item, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        next_status = serializer.validated_data.get("status")
+        allowed_statuses = {
+            option["value"] for option in available_fulfillment_statuses(item.status)
         }
-        if not item.order.is_paid:
-            raise ValidationError({"status": "Payment has not been confirmed."})
-        if next_status not in transitions[item.status]:
+        if next_status not in allowed_statuses:
             raise ValidationError({"status": f"Cannot change {item.status} to {next_status}."})
 
         item.status = next_status
         item.save(update_fields=["status"])
-        statuses = set(item.order.items.values_list("status", flat=True))
-        if statuses == {"delivered"}:
-            order_status = "delivered"
-        elif "shipped" in statuses or "delivered" in statuses:
-            order_status = "shipped"
-        elif "processing" in statuses:
-            order_status = "processing"
-        elif statuses == {"cancelled"}:
-            order_status = "cancelled"
-        else:
-            order_status = "pending"
-        item.order.status = order_status
-        item.order.save(update_fields=["status", "updated_at"])
+        order.status = aggregate_order_status(
+            order.items.values_list("status", flat=True)
+        )
+        order.save(update_fields=["status", "updated_at"])
         return Response(self.get_serializer(item).data)
 
 

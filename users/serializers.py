@@ -22,6 +22,17 @@ def validate_profile_image(image):
     return image
 
 
+class ProfileImageField(serializers.ImageField):
+    """Accept profile uploads and retain the optimized URL representation."""
+
+    def to_representation(self, value):
+        return optimized_image_url(
+            value,
+            request=self.context.get("request"),
+            width=512,
+        )
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     photo = serializers.ImageField(required=False, validators=[validate_profile_image])
     password = serializers.CharField(write_only=True, trim_whitespace=False)
@@ -68,7 +79,10 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
-    photo = serializers.SerializerMethodField()
+    photo = ProfileImageField(
+        required=False,
+        validators=[validate_profile_image],
+    )
 
     class Meta:
         model = User
@@ -78,16 +92,10 @@ class UserSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "email", "role"]
 
-    def get_photo(self, obj):
-        return optimized_image_url(obj.photo, request=self.context.get("request"), width=512)
-
     def validate_phone(self, value):
         if value and not re.fullmatch(r"[+0-9][0-9\- ()]{6,19}", value):
             raise serializers.ValidationError("Enter a valid phone number.")
         return value
-
-    def validate_photo(self, value):
-        return validate_profile_image(value)
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):

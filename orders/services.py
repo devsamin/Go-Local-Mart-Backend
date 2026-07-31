@@ -4,6 +4,43 @@ from cart.models import Cart, CartItem
 from products.models import Product
 
 
+FULFILLMENT_SEQUENCE = ("pending", "processing", "shipped", "delivered")
+FULFILLMENT_LABELS = {
+    "processing": "Processing",
+    "shipped": "Shipping",
+    "delivered": "Delivered",
+}
+
+
+def available_fulfillment_statuses(current_status):
+    """Return the forward-only statuses a seller may choose."""
+    try:
+        current_index = FULFILLMENT_SEQUENCE.index(current_status)
+    except ValueError:
+        return []
+    return [
+        {"value": value, "label": FULFILLMENT_LABELS[value]}
+        for value in FULFILLMENT_SEQUENCE[current_index + 1:]
+    ]
+
+
+def aggregate_order_status(item_statuses):
+    """Derive the buyer-visible order status from all seller-owned items."""
+    statuses = set(item_statuses)
+    if not statuses:
+        return "pending"
+    if statuses == {"cancelled"}:
+        return "cancelled"
+    active_statuses = statuses - {"cancelled"}
+    if active_statuses and active_statuses == {"delivered"}:
+        return "delivered"
+    if active_statuses and active_statuses <= {"shipped", "delivered"}:
+        return "shipped"
+    if active_statuses & {"processing", "shipped", "delivered"}:
+        return "processing"
+    return "pending"
+
+
 @transaction.atomic
 def cancel_and_release_order(order, restore_cart=False):
     """Release reserved inventory once; safe to call for duplicate Stripe events."""
