@@ -72,6 +72,10 @@ class OrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         order = self.get_object()
         if order.is_paid:
             raise ValidationError({"order": "Paid orders must be cancelled through support."})
+        if order.stripe_session_id:
+            raise ValidationError(
+                {"order": "Use the payment cancellation endpoint for an active Stripe checkout."}
+            )
         order = cancel_and_release_order(order, restore_cart=True)
         return Response({"message": "Checkout cancelled and cart restored.", "status": order.status})
 

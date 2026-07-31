@@ -6,6 +6,8 @@ from django.urls import re_path
 from django.views.static import serve
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
+from .health import health_check
+
 
 def serve_local_media(request, path):
     """Serve bundled legacy media only when explicitly enabled."""
@@ -15,6 +17,7 @@ def serve_local_media(request, path):
 
 
 urlpatterns = [
+    path("api/health/", health_check, name="health"),
     path("admin/", admin.site.urls),
     path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("api/token/verify/", TokenVerifyView.as_view(), name="token_verify"),

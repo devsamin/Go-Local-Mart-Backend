@@ -1,4 +1,5 @@
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import override_settings
@@ -19,6 +20,17 @@ class PaymentSecurityTests(APITestCase):
             inventory_reserved=True,
         )
         self.client.force_authenticate(self.buyer)
+
+    def test_local_health_check_reports_effective_storage_backends(self):
+        response = self.client.get("/api/health/")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(payload["environment"], "local")
+        self.assertEqual(payload["database"]["backend"], "sqlite")
+        self.assertFalse(payload["database"]["persistent"])
+        self.assertFalse(payload["media"]["persistent"])
+        self.assertEqual(response["Cache-Control"], "no-store")
 
     def test_status_endpoint_never_marks_order_paid(self):
         response = self.client.get("/api/payment/status/", {"order_id": self.order.id})
@@ -50,3 +62,23 @@ class PaymentSecurityTests(APITestCase):
         self.order.refresh_from_db()
         self.assertTrue(self.order.is_paid)
         self.assertEqual(self.order.transaction_id, "pi_test")
+
+    @override_settings(STRIPE_SECRET_KEY="sk_test")
+    @patch("payments.views.stripe.checkout.Session.expire")
+    @patch("payments.views.stripe.checkout.Session.retrieve")
+    def test_cancel_expires_stripe_session_before_releasing_inventory(self, retrieve, expire):
+        self.order.stripe_session_id = "cs_open"
+        self.order.save(update_fields=["stripe_session_id"])
+        retrieve.return_value = SimpleNamespace(payment_status="unpaid", status="open")
+
+        response = self.client.post(
+            "/api/payment/stripe/cancel/",
+            {"order_id": self.order.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        expire.assert_called_once_with("cs_open")
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, "cancelled")
+        self.assertFalse(self.order.inventory_reserved)

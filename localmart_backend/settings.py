@@ -96,6 +96,12 @@ DATABASES = {
 }
 DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+if IS_RENDER and not TESTING and DATABASES["default"]["ENGINE"].endswith("sqlite3"):
+    raise ImproperlyConfigured(
+        "Render must use a persistent PostgreSQL database. Set DATABASE_URL to the "
+        "internal connection string of a Render Postgres instance; SQLite files on "
+        "Render are ephemeral and lose runtime data after a restart or spin-down."
+    )
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -111,16 +117,21 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 cloudinary_values = {
-    "CLOUD_NAME": env("CLOUDINARY_CLOUD_NAME", default=""),
-    "API_KEY": env("CLOUDINARY_API_KEY", default=""),
-    "API_SECRET": env("CLOUDINARY_API_SECRET", default=""),
+    "CLOUD_NAME": env("CLOUDINARY_CLOUD_NAME", default="").strip(),
+    "API_KEY": env("CLOUDINARY_API_KEY", default="").strip(),
+    "API_SECRET": env("CLOUDINARY_API_SECRET", default="").strip(),
 }
+CLOUDINARY_URL = env("CLOUDINARY_URL", default="").strip()
+has_cloudinary_credentials = bool(CLOUDINARY_URL) or all(cloudinary_values.values())
 # Local development must not depend on an external upload service. Render sets
 # RENDER=true automatically; other production hosts can set USE_CLOUDINARY=true
 # explicitly. This remains safe even when a developer runs locally with
@@ -136,11 +147,17 @@ SERVE_LOCAL_MEDIA = env.bool(
     # continue to go to Cloudinary.
     default=IS_RENDER and not TESTING,
 )
-if USE_CLOUDINARY and all(cloudinary_values.values()):
-    CLOUDINARY_STORAGE = cloudinary_values
-    STORAGES = {
-        "default": {"BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage"},
-        "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+if USE_CLOUDINARY:
+    if not has_cloudinary_credentials:
+        raise ImproperlyConfigured(
+            "Persistent media storage is required in production. Set CLOUDINARY_URL or "
+            "all of CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET. "
+            "Local uploads on Render disappear after a restart or spin-down."
+        )
+    if all(cloudinary_values.values()):
+        CLOUDINARY_STORAGE = cloudinary_values
+    STORAGES["default"] = {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage"
     }
 
 PRODUCTION_FRONTEND_URL = "https://golocalmart.vercel.app"

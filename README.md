@@ -1,26 +1,83 @@
 # Local Mart API
 
-Django REST API for products, carts, inventory-safe checkout, Stripe payments, orders, reviews, offers, and seller analytics.
+Django REST API for products, carts, inventory-safe checkout, Stripe payments,
+orders, reviews, offers, and seller analytics.
 
-## Local setup
+## Local development
 
-1. Create and activate a virtual environment. On Windows, run `venv\Scripts\activate`.
+Local development intentionally uses its own SQLite database and local media
+directory. It does not share production data.
+
+1. Copy `.env.example` to `.env` and set local values.
 2. Install dependencies with `python -m pip install -r requirements.txt`.
-3. Copy `.env.example` to `.env` and set local values.
-4. Run `python manage.py migrate`.
-5. Run `python manage.py runserver`.
+3. Run `python manage.py migrate`.
+4. Run `python manage.py runserver`.
 
-On Windows, you can run the project without activating the environment:
+On Windows, use the project virtual environment directly:
 
 ```powershell
+.\venv\Scripts\python.exe manage.py migrate
 .\venv\Scripts\python.exe manage.py runserver
 ```
 
-Do not use `py manage.py runserver` unless the required packages are installed in your global Python environment; that command bypasses this project's virtual environment.
+The local health endpoint is `http://localhost:8000/api/health/`. A healthy
+local response reports `sqlite` and `FileSystemStorage`; both are expected to
+show `persistent: false` because they are local development services.
 
-SQLite is suitable for local development. Set `DATABASE_URL` to PostgreSQL in production. Configure the Stripe webhook endpoint as `/api/payment/stripe/webhook/`; browser redirects never mark an order paid.
+## Production persistence requirements
 
-Production uploads use Cloudinary. Media records created before Cloudinary was enabled are served from the repository's `media/` directory when `SERVE_LOCAL_MEDIA=True`; this compatibility mode defaults to enabled on Render.
+Render's service filesystem is ephemeral. Production must use:
+
+- PostgreSQL through `DATABASE_URL` for relational data.
+- Cloudinary through `CLOUDINARY_URL` (or the three individual Cloudinary
+  credential variables) for uploaded images.
+
+The application refuses to start on Render with SQLite or without persistent
+media credentials. This prevents successful-looking writes that disappear on
+the next deployment, restart, or idle spin-down.
+
+Configure the existing Render service as follows:
+
+```text
+Build Command: bash build.sh
+Start Command: python manage.py migrate --noinput && gunicorn localmart_backend.wsgi:application
+```
+
+Required environment variables:
+
+```text
+DATABASE_URL=<Render Postgres internal connection string>
+SECRET_KEY=<long random secret>
+CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME
+FRONTEND_URL=https://golocalmart.vercel.app
+BACKEND_BASE_URL=https://local-mart-11yd.onrender.com
+CORS_ALLOWED_ORIGINS=https://golocalmart.vercel.app
+CSRF_TRUSTED_ORIGINS=https://golocalmart.vercel.app
+STRIPE_SECRET_KEY=<Stripe secret key>
+STRIPE_WEBHOOK_SECRET=<Stripe webhook signing secret>
+DEBUG=False
+```
+
+After deployment, `https://local-mart-11yd.onrender.com/api/health/` must return
+HTTP 200 and report:
+
+```json
+{
+  "database": { "backend": "postgresql", "persistent": true },
+  "media": { "backend": "MediaCloudinaryStorage", "persistent": true }
+}
+```
+
+Use a non-expiring PostgreSQL plan for production. Render's free PostgreSQL
+instances expire, so they are suitable only for temporary testing.
+
+## Existing data
+
+The old `db.sqlite3` file is ignored and no longer tracked. It remains available
+on each developer's machine for local work, but deployment must not use it.
+Create the PostgreSQL database and migrate any recoverable SQLite data before
+accepting new production writes. Records already lost during an ephemeral
+filesystem reset cannot be recovered without an external backup.
 
 ## Verification
 
@@ -29,3 +86,6 @@ python manage.py check --deploy
 python manage.py test
 python manage.py makemigrations --check --dry-run
 ```
+
+Stripe browser redirects never mark an order paid. Only the verified Stripe
+webhook can do that. The webhook endpoint is `/api/payment/stripe/webhook/`.
