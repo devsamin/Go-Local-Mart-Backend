@@ -2,9 +2,10 @@ import base64
 import tempfile
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.conf import settings
 from django.test import override_settings
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
 from .models import User
 
@@ -18,7 +19,7 @@ class UserApiTests(APITestCase):
             ),
             content_type="image/png",
         )
-        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+        with tempfile.TemporaryDirectory(dir=settings.BASE_DIR) as media_root, override_settings(MEDIA_ROOT=media_root):
             response = self.client.post(
                 "/api/users/register/",
                 {
@@ -31,8 +32,71 @@ class UserApiTests(APITestCase):
                 format="multipart",
             )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            self.assertIn("/media/profile_photos/", response.data["photo"])
+            self.assertIn("no-store", response["Cache-Control"])
+
         self.assertTrue(User.objects.filter(username="photo-buyer").exists())
+
+    def test_profile_photo_survives_logout_and_a_fresh_login(self):
+        image = SimpleUploadedFile(
+            "session-avatar.png",
+            base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ),
+            content_type="image/png",
+        )
+        credentials = {
+            "username": "returning-buyer",
+            "email": "returning-buyer@example.com",
+            "password": "Strong-pass-123",
+            "role": "buyer",
+        }
+
+        with tempfile.TemporaryDirectory(dir=settings.BASE_DIR) as media_root, override_settings(MEDIA_ROOT=media_root):
+            registration = self.client.post(
+                "/api/users/register/",
+                {**credentials, "photo": image},
+                format="multipart",
+            )
+            self.assertEqual(registration.status_code, status.HTTP_201_CREATED)
+
+            first_login = self.client.post(
+                "/api/users/login/",
+                {"username": credentials["username"], "password": credentials["password"], "role": "buyer"},
+                format="json",
+            )
+            self.assertEqual(first_login.status_code, status.HTTP_200_OK)
+            first_client = APIClient()
+            first_client.credentials(HTTP_AUTHORIZATION=f"Bearer {first_login.data['access']}")
+            first_profile = first_client.get("/api/users/profile/")
+            self.assertEqual(first_profile.status_code, status.HTTP_200_OK)
+            self.assertIn("session-avatar.png", first_profile.data["photo"])
+            self.assertIn("no-store", first_profile["Cache-Control"])
+            self.assertIn("Authorization", first_profile["Vary"])
+
+            logout = first_client.post(
+                "/api/users/logout/",
+                {"refresh": first_login.data["refresh"]},
+                format="json",
+            )
+            self.assertEqual(logout.status_code, status.HTTP_204_NO_CONTENT)
+
+            second_login = APIClient().post(
+                "/api/users/login/",
+                {"username": credentials["username"], "password": credentials["password"], "role": "buyer"},
+                format="json",
+            )
+            self.assertEqual(second_login.status_code, status.HTTP_200_OK)
+            second_client = APIClient()
+            second_client.credentials(HTTP_AUTHORIZATION=f"Bearer {second_login.data['access']}")
+            second_profile = second_client.get("/api/users/profile/")
+
+            self.assertEqual(second_profile.status_code, status.HTTP_200_OK)
+            self.assertEqual(second_profile.data["photo"], first_profile.data["photo"])
+            self.assertTrue(User.objects.get(username=credentials["username"]).photo.storage.exists(
+                User.objects.get(username=credentials["username"]).photo.name
+            ))
 
     def test_registration_rejects_admin_role(self):
         response = self.client.post(
@@ -83,7 +147,7 @@ class UserApiTests(APITestCase):
             ),
             content_type="image/png",
         )
-        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+        with tempfile.TemporaryDirectory(dir=settings.BASE_DIR) as media_root, override_settings(MEDIA_ROOT=media_root):
             user = User.objects.create_user(
                 "photo-update",
                 email="photo-update@example.com",

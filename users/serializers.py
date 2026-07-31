@@ -34,7 +34,7 @@ class ProfileImageField(serializers.ImageField):
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    photo = serializers.ImageField(required=False, validators=[validate_profile_image])
+    photo = ProfileImageField(required=False, validators=[validate_profile_image])
     password = serializers.CharField(write_only=True, trim_whitespace=False)
 
     class Meta:

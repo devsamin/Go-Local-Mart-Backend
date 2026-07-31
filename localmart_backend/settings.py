@@ -20,6 +20,11 @@ environ.Env.read_env(BASE_DIR / ".env")
 
 DEBUG = env.bool("DEBUG", default=False)
 IS_RENDER = env.bool("RENDER", default=False)
+if IS_RENDER and DEBUG and not TESTING:
+    raise ImproperlyConfigured(
+        "DEBUG must be False on Render. Debug responses expose internal settings "
+        "and indicate that the production environment is misconfigured."
+    )
 SECRET_KEY = env("SECRET_KEY", default="")
 if not SECRET_KEY:
     if DEBUG or TESTING:
@@ -132,13 +137,12 @@ cloudinary_values = {
 }
 CLOUDINARY_URL = env("CLOUDINARY_URL", default="").strip()
 has_cloudinary_credentials = bool(CLOUDINARY_URL) or all(cloudinary_values.values())
-# Local development must not depend on an external upload service. Render sets
-# RENDER=true automatically; other production hosts can set USE_CLOUDINARY=true
-# explicitly. This remains safe even when a developer runs locally with
-# DEBUG=false.
-USE_CLOUDINARY = env.bool(
+# Local development does not depend on an external upload service. Render sets
+# RENDER=true automatically and may never opt out of persistent media storage;
+# other production hosts can enable it explicitly.
+USE_CLOUDINARY = (IS_RENDER and not TESTING) or env.bool(
     "USE_CLOUDINARY",
-    default=IS_RENDER and not TESTING,
+    default=False,
 )
 SERVE_LOCAL_MEDIA = env.bool(
     "SERVE_LOCAL_MEDIA",

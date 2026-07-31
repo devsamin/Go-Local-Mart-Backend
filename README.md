@@ -32,9 +32,10 @@ Render's service filesystem is ephemeral. Production must use:
 - Cloudinary through `CLOUDINARY_URL` (or the three individual Cloudinary
   credential variables) for uploaded images.
 
-The application refuses to start on Render with SQLite or without persistent
-media credentials. This prevents successful-looking writes that disappear on
-the next deployment, restart, or idle spin-down.
+The application refuses to start on Render with `DEBUG=True`, SQLite, or
+without persistent media credentials. `USE_CLOUDINARY=False` cannot disable
+this protection on Render. This prevents successful-looking writes that
+disappear on the next deployment, restart, or idle spin-down.
 
 Configure the existing Render service as follows:
 
