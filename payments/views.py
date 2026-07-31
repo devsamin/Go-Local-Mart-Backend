@@ -11,6 +11,7 @@ from rest_framework.response import Response
 
 from orders.models import Order
 from orders.services import cancel_and_release_order
+from .services import PaymentConfirmationError, confirm_order_payment
 
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -108,6 +109,47 @@ def payment_status(request):
         {"order_id": order.id, "paid": order.is_paid, "status": order.status},
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def confirm_stripe_checkout(request):
+    """Reconcile the browser return against Stripe without trusting the browser."""
+    try:
+        order_id = int(request.data.get("order_id"))
+    except (TypeError, ValueError):
+        raise ValidationError({"order_id": "A valid order ID is required."})
+    session_id = str(request.data.get("session_id") or "").strip()
+    if not session_id:
+        raise ValidationError({"session_id": "A Stripe checkout session is required."})
+
+    try:
+        order = Order.objects.get(id=order_id, user=request.user)
+    except Order.DoesNotExist:
+        return Response({"error": "Order not found."}, status=status.HTTP_404_NOT_FOUND)
+    if order.is_paid:
+        return Response({"order_id": order.id, "paid": True, "status": order.status})
+    if order.stripe_session_id and session_id != order.stripe_session_id:
+        raise ValidationError({"session_id": "This checkout session does not belong to the order."})
+    if not settings.STRIPE_SECRET_KEY:
+        return Response(
+            {"error": "Payments are not configured."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        if session.get("payment_status") == "paid":
+            order = confirm_order_payment(order.id, session)
+    except stripe.StripeError:
+        return Response(
+            {"error": "Stripe could not confirm the payment yet."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except PaymentConfirmationError as exc:
+        raise ValidationError({"session_id": str(exc)})
+
+    return Response({"order_id": order.id, "paid": order.is_paid, "status": order.status})
 
 
 @api_view(["POST"])

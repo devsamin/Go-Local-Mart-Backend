@@ -9,6 +9,7 @@ FULFILLMENT_LABELS = {
     "processing": "Processing",
     "shipped": "Shipping",
     "delivered": "Delivered",
+    "cancelled": "Cancelled",
 }
 
 
@@ -18,10 +19,13 @@ def available_fulfillment_statuses(current_status):
         current_index = FULFILLMENT_SEQUENCE.index(current_status)
     except ValueError:
         return []
-    return [
+    options = [
         {"value": value, "label": FULFILLMENT_LABELS[value]}
         for value in FULFILLMENT_SEQUENCE[current_index + 1:]
     ]
+    if current_status != "delivered":
+        options.append({"value": "cancelled", "label": FULFILLMENT_LABELS["cancelled"]})
+    return options
 
 
 def aggregate_order_status(item_statuses):
@@ -39,6 +43,30 @@ def aggregate_order_status(item_statuses):
     if active_statuses & {"processing", "shipped", "delivered"}:
         return "processing"
     return "pending"
+
+
+@transaction.atomic
+def cancel_paid_order_item(item):
+    """Cancel one seller-owned item and restore its inventory exactly once."""
+    item = type(item).objects.select_for_update().select_related("order").get(pk=item.pk)
+    if item.status in {"cancelled", "delivered"}:
+        return item
+
+    order = type(item.order).objects.select_for_update().get(pk=item.order_id)
+    if not order.is_paid:
+        raise ValueError("Only paid order items can be cancelled by a seller.")
+
+    if item.product_id:
+        product = Product.objects.select_for_update().filter(pk=item.product_id).first()
+        if product:
+            product.stock += item.quantity
+            product.save(update_fields=["stock"])
+
+    item.status = "cancelled"
+    item.save(update_fields=["status"])
+    order.status = aggregate_order_status(order.items.values_list("status", flat=True))
+    order.save(update_fields=["status", "updated_at"])
+    return item
 
 
 @transaction.atomic

@@ -1,11 +1,11 @@
 import stripe
 from django.conf import settings
-from django.db import transaction
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from orders.models import Order
 from orders.services import cancel_and_release_order
+from .services import PaymentConfirmationError, confirm_order_payment
 
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -38,18 +38,11 @@ def stripe_webhook(request):
         return HttpResponse(status=200)
 
     if event["type"] in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
-        with transaction.atomic():
-            order = Order.objects.select_for_update().get(pk=order.pk)
-            if not order.is_paid and session.get("payment_status") == "paid":
-                order.is_paid = True
-                order.status = "pending"
-                order.transaction_id = session.get("payment_intent") or ""
-                order.stripe_session_id = session.get("id") or order.stripe_session_id
-                order.save(
-                    update_fields=[
-                        "is_paid", "status", "transaction_id", "stripe_session_id", "updated_at"
-                    ]
-                )
+        if session.get("payment_status") == "paid":
+            try:
+                confirm_order_payment(order.id, session)
+            except PaymentConfirmationError:
+                return HttpResponse(status=400)
     elif event["type"] in {"checkout.session.expired", "checkout.session.async_payment_failed"}:
         cancel_and_release_order(order, restore_cart=True)
 

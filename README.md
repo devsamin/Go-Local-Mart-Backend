@@ -88,4 +88,9 @@ python manage.py makemigrations --check --dry-run
 ```
 
 Stripe browser redirects never mark an order paid. Only the verified Stripe
-webhook can do that. The webhook endpoint is `/api/payment/stripe/webhook/`.
+webhook or a server-to-server Checkout Session verification can do that. The
+webhook endpoint is `/api/payment/stripe/webhook/`. Register that HTTPS endpoint
+in Stripe for `checkout.session.completed`,
+`checkout.session.async_payment_succeeded`, `checkout.session.expired`, and
+`checkout.session.async_payment_failed`, then copy its signing secret to
+`STRIPE_WEBHOOK_SECRET`.

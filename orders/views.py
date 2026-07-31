@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.shortcuts import get_object_or_404
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -15,6 +16,7 @@ from .services import (
     aggregate_order_status,
     available_fulfillment_statuses,
     cancel_and_release_order,
+    cancel_paid_order_item,
 )
 
 
@@ -38,7 +40,10 @@ class SellerOrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
 
     @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
-        item = self.get_queryset().select_for_update().get(pk=kwargs["pk"])
+        item = get_object_or_404(
+            self.get_queryset().select_for_update(),
+            pk=kwargs["pk"],
+        )
         order = Order.objects.select_for_update().get(pk=item.order_id)
         serializer = self.get_serializer(item, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -49,12 +54,15 @@ class SellerOrderViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
         if next_status not in allowed_statuses:
             raise ValidationError({"status": f"Cannot change {item.status} to {next_status}."})
 
-        item.status = next_status
-        item.save(update_fields=["status"])
-        order.status = aggregate_order_status(
-            order.items.values_list("status", flat=True)
-        )
-        order.save(update_fields=["status", "updated_at"])
+        if next_status == "cancelled":
+            item = cancel_paid_order_item(item)
+        else:
+            item.status = next_status
+            item.save(update_fields=["status"])
+            order.status = aggregate_order_status(
+                order.items.values_list("status", flat=True)
+            )
+            order.save(update_fields=["status", "updated_at"])
         return Response(self.get_serializer(item).data)
 
 
