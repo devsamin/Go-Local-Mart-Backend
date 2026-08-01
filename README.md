@@ -38,7 +38,8 @@ Render's service filesystem is ephemeral. Production must use:
 Storage and database selection follow Django's `DEBUG` setting automatically.
 Set `DJANGO_DEBUG=False` in production; the application then requires PostgreSQL
 and Cloudinary credentials and refuses to start with SQLite or local upload
-storage. Render additionally refuses to start with debug mode enabled.
+storage. Render always forces debug mode off, even if a stale dashboard variable
+is set to true.
 
 Configure the existing Render service as follows:
 

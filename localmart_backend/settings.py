@@ -18,17 +18,17 @@ TESTING = "test" in sys.argv
 env = environ.Env(DEBUG=(bool, False), DJANGO_DEBUG=(bool, False))
 environ.Env.read_env(BASE_DIR / ".env")
 
+IS_RENDER = env.bool("RENDER", default=False)
 # DJANGO_DEBUG avoids collisions with generic system-level DEBUG variables.
 # DEBUG remains a backwards-compatible fallback for existing deployments.
-DEBUG = env.bool("DJANGO_DEBUG", default=env.bool("DEBUG", default=False))
-IS_RENDER = env.bool("RENDER", default=False)
+# Render is always production, even if a stale dashboard variable says True.
+requested_debug = env.bool(
+    "DJANGO_DEBUG",
+    default=env.bool("DEBUG", default=False),
+)
+DEBUG = requested_debug and not IS_RENDER
 LOCAL_DEVELOPMENT = DEBUG or TESTING
 IS_PRODUCTION = not LOCAL_DEVELOPMENT
-if IS_RENDER and DEBUG and not TESTING:
-    raise ImproperlyConfigured(
-        "DEBUG must be False on Render. Debug responses expose internal settings "
-        "and indicate that the production environment is misconfigured."
-    )
 SECRET_KEY = env("SECRET_KEY", default="")
 if not SECRET_KEY:
     if DEBUG or TESTING:
