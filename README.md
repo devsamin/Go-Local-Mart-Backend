@@ -5,8 +5,11 @@ orders, reviews, offers, and seller analytics.
 
 ## Local development
 
-Local development intentionally uses its own SQLite database and local media
-directory. It does not share production data.
+With `DJANGO_DEBUG=True` (the Django `DEBUG` setting), local development always
+uses its own SQLite database and local media directory. Production credentials
+may remain in `.env`; they are ignored locally, so development does not share
+production data. The dedicated name avoids collisions with unrelated system
+variables named `DEBUG`.
 
 1. Copy `.env.example` to `.env` and set local values.
 2. Install dependencies with `python -m pip install -r requirements.txt`.
@@ -28,14 +31,14 @@ show `persistent: false` because they are local development services.
 
 Render's service filesystem is ephemeral. Production must use:
 
-- PostgreSQL through `DATABASE_URL` for relational data.
+- Neon PostgreSQL through its pooled `DATABASE_URL` for relational data.
 - Cloudinary through `CLOUDINARY_URL` (or the three individual Cloudinary
   credential variables) for uploaded images.
 
-The application refuses to start on Render with `DEBUG=True`, SQLite, or
-without persistent media credentials. `USE_CLOUDINARY=False` cannot disable
-this protection on Render. This prevents successful-looking writes that
-disappear on the next deployment, restart, or idle spin-down.
+Storage and database selection follow Django's `DEBUG` setting automatically.
+Set `DJANGO_DEBUG=False` in production; the application then requires PostgreSQL
+and Cloudinary credentials and refuses to start with SQLite or local upload
+storage. Render additionally refuses to start with debug mode enabled.
 
 Configure the existing Render service as follows:
 
@@ -47,9 +50,11 @@ Start Command: python manage.py migrate --noinput && gunicorn localmart_backend.
 Required environment variables:
 
 ```text
-DATABASE_URL=<Render Postgres internal connection string>
+DATABASE_URL=<Neon pooled PostgreSQL connection string>
 SECRET_KEY=<long random secret>
-CLOUDINARY_URL=cloudinary://API_KEY:API_SECRET@CLOUD_NAME
+CLOUDINARY_CLOUD_NAME=<Cloudinary cloud name>
+CLOUDINARY_API_KEY=<Cloudinary API key>
+CLOUDINARY_API_SECRET=<Cloudinary API secret>
 FRONTEND_URL=https://golocalmart.vercel.app
 BACKEND_BASE_URL=https://local-mart-11yd.onrender.com
 CORS_ALLOWED_ORIGINS=https://golocalmart.vercel.app
@@ -57,6 +62,7 @@ CSRF_TRUSTED_ORIGINS=https://golocalmart.vercel.app
 STRIPE_SECRET_KEY=<Stripe secret key>
 STRIPE_WEBHOOK_SECRET=<Stripe webhook signing secret>
 DEBUG=False
+DJANGO_DEBUG=False
 ```
 
 After deployment, `https://local-mart-11yd.onrender.com/api/health/` must return
@@ -69,8 +75,8 @@ HTTP 200 and report:
 }
 ```
 
-Use a non-expiring PostgreSQL plan for production. Render's free PostgreSQL
-instances expire, so they are suitable only for temporary testing.
+Keep Neon's `sslmode=require` and `channel_binding=require` URL parameters in
+production. The pooler hostname is preferred for the Render web service.
 
 ## Existing data
 
@@ -79,6 +85,12 @@ on each developer's machine for local work, but deployment must not use it.
 Create the PostgreSQL database and migrate any recoverable SQLite data before
 accepting new production writes. Records already lost during an ephemeral
 filesystem reset cannot be recovered without an external backup.
+
+Legacy database values such as `profile_photos/example.jpg` refer to local
+files, not Cloudinary assets. If the corresponding file is no longer present,
+the API returns `null` instead of fabricating a Cloudinary URL that will 404;
+the user must upload the original image again. Successful Cloudinary uploads
+store public IDs beginning with the configured `media/` prefix.
 
 ## Verification
 

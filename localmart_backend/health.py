@@ -18,7 +18,7 @@ def health_check(request):
     media_backend = default_storage.__class__.__module__
     persistent_database = database_backend == "postgresql"
     persistent_media = media_backend.startswith("cloudinary_storage.")
-    production = settings.IS_RENDER
+    production = settings.IS_PRODUCTION
     persistence_ok = not production or (persistent_database and persistent_media)
     healthy = database_ok and persistence_ok
 

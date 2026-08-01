@@ -8,9 +8,57 @@ from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
 from .models import User
+from localmart_backend.media import optimized_image_url
+
+
+class FakeCloudinaryStorage:
+    def _get_prefix(self):
+        return "/media/"
+
+
+FakeCloudinaryStorage.__module__ = "cloudinary_storage.storage"
+
+
+class FakeImageField:
+    def __init__(self, name, url):
+        self.name = name
+        self.storage = FakeCloudinaryStorage()
+        self._url = url
+
+    def __bool__(self):
+        return bool(self.name)
+
+    @property
+    def url(self):
+        return self._url
 
 
 class UserApiTests(APITestCase):
+    def test_missing_legacy_photo_does_not_generate_a_cloudinary_404_url(self):
+        legacy_photo = FakeImageField(
+            "profile_photos/c.jpg",
+            "https://res.cloudinary.com/example/image/upload/v1/media/profile_photos/c.jpg",
+        )
+
+        with tempfile.TemporaryDirectory(dir=settings.BASE_DIR) as media_root, override_settings(
+            MEDIA_ROOT=media_root,
+            DEBUG=True,
+            SERVE_LOCAL_MEDIA=True,
+        ):
+            self.assertIsNone(optimized_image_url(legacy_photo, width=512))
+
+    def test_real_cloudinary_public_id_gets_an_optimized_url(self):
+        cloudinary_photo = FakeImageField(
+            "media/profile_photos/session-avatar",
+            "https://res.cloudinary.com/example/image/upload/v42/media/profile_photos/session-avatar.jpg",
+        )
+
+        self.assertEqual(
+            optimized_image_url(cloudinary_photo, width=512),
+            "https://res.cloudinary.com/example/image/upload/"
+            "f_auto,q_auto,c_limit,w_512/v42/media/profile_photos/session-avatar.jpg",
+        )
+
     def test_registration_with_photo_uses_local_media_in_tests(self):
         image = SimpleUploadedFile(
             "avatar.png",

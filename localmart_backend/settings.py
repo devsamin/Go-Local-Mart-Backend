@@ -15,11 +15,15 @@ from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TESTING = "test" in sys.argv
-env = environ.Env(DEBUG=(bool, False))
+env = environ.Env(DEBUG=(bool, False), DJANGO_DEBUG=(bool, False))
 environ.Env.read_env(BASE_DIR / ".env")
 
-DEBUG = env.bool("DEBUG", default=False)
+# DJANGO_DEBUG avoids collisions with generic system-level DEBUG variables.
+# DEBUG remains a backwards-compatible fallback for existing deployments.
+DEBUG = env.bool("DJANGO_DEBUG", default=env.bool("DEBUG", default=False))
 IS_RENDER = env.bool("RENDER", default=False)
+LOCAL_DEVELOPMENT = DEBUG or TESTING
+IS_PRODUCTION = not LOCAL_DEVELOPMENT
 if IS_RENDER and DEBUG and not TESTING:
     raise ImproperlyConfigured(
         "DEBUG must be False on Render. Debug responses expose internal settings "
@@ -96,17 +100,27 @@ TEMPLATES = [
     },
 ]
 
-DATABASES = {
-    "default": env.db("DATABASE_URL", default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
-}
+if LOCAL_DEVELOPMENT:
+    # Production credentials may safely remain in .env: local development
+    # deliberately ignores DATABASE_URL and always uses the local SQLite file.
+    DATABASES = {
+        "default": environ.Env.db_url_config(
+            f"sqlite:///{BASE_DIR / 'db.sqlite3'}"
+        )
+    }
+else:
+    database_url = env("DATABASE_URL", default="").strip()
+    if not database_url:
+        raise ImproperlyConfigured(
+            "DATABASE_URL is required when DEBUG is false."
+        )
+    DATABASES = {"default": environ.Env.db_url_config(database_url)}
+    if not DATABASES["default"]["ENGINE"].endswith("postgresql"):
+        raise ImproperlyConfigured(
+            "DATABASE_URL must use PostgreSQL when DEBUG is false."
+        )
 DATABASES["default"]["CONN_MAX_AGE"] = env.int("DB_CONN_MAX_AGE", default=60)
 DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
-if IS_RENDER and not TESTING and DATABASES["default"]["ENGINE"].endswith("sqlite3"):
-    raise ImproperlyConfigured(
-        "Render must use a persistent PostgreSQL database. Set DATABASE_URL to the "
-        "internal connection string of a Render Postgres instance; SQLite files on "
-        "Render are ephemeral and lose runtime data after a restart or spin-down."
-    )
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -137,20 +151,10 @@ cloudinary_values = {
 }
 CLOUDINARY_URL = env("CLOUDINARY_URL", default="").strip()
 has_cloudinary_credentials = bool(CLOUDINARY_URL) or all(cloudinary_values.values())
-# Local development does not depend on an external upload service. Render sets
-# RENDER=true automatically and may never opt out of persistent media storage;
-# other production hosts can enable it explicitly.
-USE_CLOUDINARY = (IS_RENDER and not TESTING) or env.bool(
-    "USE_CLOUDINARY",
-    default=False,
-)
-SERVE_LOCAL_MEDIA = env.bool(
-    "SERVE_LOCAL_MEDIA",
-    # The repository contains legacy media referenced by the production
-    # database. Keep those files reachable on Render while all new uploads
-    # continue to go to Cloudinary.
-    default=IS_RENDER and not TESTING,
-)
+# Storage follows DEBUG automatically. Credentials can remain in .env during
+# development because they are ignored until DEBUG is false.
+USE_CLOUDINARY = IS_PRODUCTION
+SERVE_LOCAL_MEDIA = LOCAL_DEVELOPMENT
 if USE_CLOUDINARY:
     if not has_cloudinary_credentials:
         raise ImproperlyConfigured(
@@ -168,11 +172,11 @@ PRODUCTION_FRONTEND_URL = "https://golocalmart.vercel.app"
 PRODUCTION_BACKEND_URL = "https://local-mart-11yd.onrender.com"
 FRONTEND_URL = env(
     "FRONTEND_URL",
-    default=PRODUCTION_FRONTEND_URL if IS_RENDER else "http://localhost:5173",
+    default=PRODUCTION_FRONTEND_URL if IS_PRODUCTION else "http://localhost:5173",
 ).rstrip("/")
 BACKEND_BASE_URL = env(
     "BACKEND_BASE_URL",
-    default=PRODUCTION_BACKEND_URL if IS_RENDER else "http://localhost:8000",
+    default=PRODUCTION_BACKEND_URL if IS_PRODUCTION else "http://localhost:8000",
 ).rstrip("/")
 configured_cors_origins = env.list(
     "CORS_ALLOWED_ORIGINS",
