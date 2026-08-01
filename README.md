@@ -60,11 +60,14 @@ FRONTEND_URL=https://golocalmart.vercel.app
 BACKEND_BASE_URL=https://local-mart-11yd.onrender.com
 CORS_ALLOWED_ORIGINS=https://golocalmart.vercel.app
 CSRF_TRUSTED_ORIGINS=https://golocalmart.vercel.app
-STRIPE_SECRET_KEY=<Stripe secret key>
-STRIPE_WEBHOOK_SECRET=<Stripe webhook signing secret>
 DEBUG=False
 DJANGO_DEBUG=False
 ```
+
+Stripe is optional for application startup. To enable payments, also set both
+`STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`; without them, Stripe checkout
+and webhook endpoints return HTTP 503 while the rest of the API remains
+available.
 
 After deployment, `https://local-mart-11yd.onrender.com/api/health/` must return
 HTTP 200 and report:

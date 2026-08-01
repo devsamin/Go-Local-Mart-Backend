@@ -40,6 +40,27 @@ class PaymentSecurityTests(APITestCase):
         self.order.refresh_from_db()
         self.assertFalse(self.order.is_paid)
 
+    @override_settings(STRIPE_SECRET_KEY="")
+    def test_checkout_returns_service_unavailable_when_stripe_is_not_configured(self):
+        response = self.client.post(
+            "/api/payment/stripe/checkout/",
+            {"order_id": self.order.id},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(response.data["error"], "Payments are not configured.")
+
+    @override_settings(STRIPE_WEBHOOK_SECRET="")
+    def test_webhook_returns_service_unavailable_when_stripe_is_not_configured(self):
+        response = self.client.post(
+            "/api/payment/stripe/webhook/",
+            data=b"{}",
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+
     @override_settings(STRIPE_WEBHOOK_SECRET="whsec_test")
     @patch("payments.webhooks.stripe.Webhook.construct_event")
     def test_verified_webhook_marks_order_paid(self, construct_event):

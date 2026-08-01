@@ -229,11 +229,7 @@ STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
 STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY", default="")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
 STRIPE_CURRENCY = env("STRIPE_CURRENCY", default="bdt")
-if IS_RENDER and not TESTING and (not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET):
-    raise ImproperlyConfigured(
-        "Stripe payments require both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET on Render. "
-        "Without the signed webhook, completed orders can remain hidden from sellers."
-    )
+STRIPE_PAYMENTS_ENABLED = bool(STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
